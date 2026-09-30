@@ -8,12 +8,29 @@ from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, Seq2SeqTrainer, S
     EarlyStoppingCallback, T5Tokenizer, T5ForConditionalGeneration
 from utils import RecDataset, ensure_dir, RecCollator, set_seed, setup_logging
 import os
+import torch
+
+
+def parse_bool(value):
+    if value.lower() in ('true', '1', 'yes'):
+        return True
+    if value.lower() in ('false', '0', 'no'):
+        return False
+    raise argparse.ArgumentTypeError('Expected true or false')
+
+
+class FiniteLossTrainer(Seq2SeqTrainer):
+    def compute_loss(self, model, inputs, return_outputs=False):
+        loss, outputs = super().compute_loss(model, inputs, return_outputs=True)
+        if not torch.isfinite(loss).all():
+            raise FloatingPointError('Non-finite loss: check precision and learning rate; restart from a known finite model.')
+        return (loss, outputs) if return_outputs else loss
 
 # needs to be set to false, otherwise deadlock may occur
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 
 # setting constrained cuda device
-os.environ['CUDA_VISIBLE_DEVICES'] = '5,6'
+# os.environ['CUDA_VISIBLE_DEVICES'] = '5,6'
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -21,7 +38,8 @@ if __name__ == '__main__':
     # TrainerArguments
     parser.add_argument('--output_dir', type=str, default='./checkpoints')
     parser.add_argument('--batch_size', type=int, default=128)
-    parser.add_argument('--bf16', type=bool, default=transformers.utils.import_utils.is_torch_bf16_available())
+    parser.add_argument('--precision', choices=['fp32', 'fp16', 'bf16'], default=None, help='Default: fp32')
+    parser.add_argument('--bf16', type=parse_bool, default=None, help='Legacy option; false selects fp32')
     parser.add_argument('--epoch', type=int, default=200)
     parser.add_argument('--optimizer', type=str, default='adamw_torch')
     parser.add_argument('--lr', type=float, default=5e-4)
@@ -48,6 +66,10 @@ if __name__ == '__main__':
     parser.add_argument('--max_sent_len', type=int, default=512, help='max length of model input sequence')
 
     args = parser.parse_args()
+    if args.precision is not None and args.bf16 is not None:
+        parser.error('Use either --precision or --bf16, not both')
+    args.precision = args.precision or ('bf16' if args.bf16 else 'fp32')
+    args.bf16 = args.precision == 'bf16' 
     set_seed()
     setup_logging()
 
@@ -111,7 +133,8 @@ if __name__ == '__main__':
                                              weight_decay=args.weight_decay,
                                              warmup_ratio=args.warmup_ratio,
                                              lr_scheduler_type=args.lr_scheduler_type,
-                                             fp16=not args.bf16,
+                                             fp16=args.precision == 'fp16',
+                                             logging_nan_inf_filter=False,
                                              bf16=args.bf16,
                                              dataloader_num_workers=4,
                                              save_strategy='epoch',
@@ -121,7 +144,7 @@ if __name__ == '__main__':
     # set false when training, see https://stackoverflow.com/questions/76633335/why-does-hugging-face-falcon-model-use-mode-config-use-cache-false-why-wouldn for more details
     model.config.use_cache = False
 
-    trainer = Seq2SeqTrainer(model=model,
+    trainer = FiniteLossTrainer(model=model,
                              train_dataset=train_dataset,
                              eval_dataset=valid_dataset,
                              args=training_args,
