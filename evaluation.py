@@ -134,7 +134,8 @@ if __name__ == '__main__':
     ckpt_dir = os.path.join(ckpt_dir, token_size)
 
     tokenizer = AutoTokenizer.from_pretrained(ckpt_dir)
-    model = AutoModelForSeq2SeqLM.from_pretrained(ckpt_dir, torch_dtype=torch.bfloat16)
+    # model = AutoModelForSeq2SeqLM.from_pretrained(ckpt_dir, torch_dtype=torch.bfloat16)
+    model = AutoModelForSeq2SeqLM.from_pretrained(ckpt_dir, torch_dtype=torch.float32)
 
     model.to(args.device)
     model.eval()
@@ -158,7 +159,8 @@ if __name__ == '__main__':
     total = len(test_dataset)
 
     with torch.no_grad():
-        for batch in tqdm(test_dataloader, desc='[Testing]', disable=True):
+        # for batch in tqdm(test_dataloader, desc='[Testing]', disable=True):
+        for batch in tqdm(test_dataloader, desc='[Testing]', mininterval=5):
             input_ids, attention_mask, targets = batch['input_ids'], batch['attention_mask'], batch['labels']
             input_ids, attention_mask = input_ids.to(args.device), attention_mask.to(args.device)
 
